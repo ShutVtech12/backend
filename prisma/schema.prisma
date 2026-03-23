@@ -27,7 +27,7 @@ model coleccion {
 
 model libro {
   id_libro          Int         @id @default(autoincrement())
-  titulo            String      @db.VarChar(50)
+  titulo            String      @db.VarChar(255)
   isbn              String      @unique @db.VarChar(150)
   fecha_publicacion DateTime    @db.Date
   id_autor          Int

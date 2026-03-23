@@ -1,4 +1,12 @@
 const bcryptjs = require('bcryptjs')
+const jwt = require('jsonwebtoken')
+require('dotenv').config({ path: '.env' })
+
+const crearToken = (usuario, secreta, expiresIn) => {
+    const { id_usuario, correo, nombre, apellidos } = usuario
+
+    return jwt.sign({ id: id_usuario, correo, nombre, apellidos }, secreta, { expiresIn })
+}
 
 const resolvers = {
     //Todas las funciones para la lectura de los datos.
@@ -106,6 +114,22 @@ const resolvers = {
                 throw new Error("No se pudo cargar la información del libro")
             }
         },
+        obtenerLibroPorISBN: async (_, { isbn }, { prisma }) => {
+            try {
+                const libro = await prisma.libro.findUnique({
+                    where: { isbn },
+                    include: {
+                        autor: true
+                    }
+                });
+
+                if (!libro) return null;
+                return libro;
+            } catch (error) {
+                console.error(error);
+                throw new Error("Error al buscar el libro por ISBN");
+            }
+        },
         obtenerColeccion: async (_, { id }, { prisma }) => {
             try {
                 const coleccion = await prisma.coleccion.findUnique({
@@ -158,6 +182,23 @@ const resolvers = {
                 throw new Error("No se pudo cargar la información de los libros por autor")
             }
         },
+        obtenerAutorPorNombre: async (_, { nombre }, { prisma }) => {
+            try {
+                const autor = await prisma.autor.findFirst({
+                    where: {
+                        nombre: {
+                            equals: nombre,
+                            mode: 'insensitive'
+                        }
+                    }
+                });
+
+                return autor;
+            } catch (error) {
+                console.error(error);
+                throw new Error("Error al buscar el autor por nombre");
+            }
+        },
         obtenerColeccionesPorUsuario: async (_, { id }, { prisma }) => {
             try {
                 const colecciones = await prisma.coleccion.findMany({
@@ -165,7 +206,9 @@ const resolvers = {
                         id_usuario: Number(id)
                     },
                     include: {
-                        usuario: true
+                        libro: {
+                            include: { autor: true }
+                        }
                     }
                 })
                 if (colecciones.length === 0) {
@@ -200,7 +243,9 @@ const resolvers = {
 
     Mutation: {
         crearRol: async (parent, { input }, { prisma }) => {
-            const existe = await prisma.rol.findUnique({ where: { nombre_rol: input.nombre_rol } })
+            const existe = await prisma.rol.findFirst({
+                where: { nombre_rol: input.nombre_rol }
+            });
             if (existe) throw new Error("El rol ya existe")
             try {
                 const nuevoRol = await prisma.rol.create({
@@ -286,6 +331,24 @@ const resolvers = {
                 throw new Error("No se puede eliminar el autor: " + error.message)
             }
         },
+        autenticarUsuario: async (_, { input }, { prisma }) => {
+            const { correo, password } = input
+            //Si el usuario existe
+            const existeUsuario = await prisma.usuario.findUnique({ where: { correo } })
+            if (!existeUsuario) {
+                throw new Error('El Usuario no existe')
+            }
+            //Si el password es correcto
+            const passwordCorrecto = await bcryptjs.compare(password, existeUsuario.password)
+            //console.log('Password correcto')
+            if (!passwordCorrecto) {
+                throw new Error('Password incorrecto')
+            }
+            //Dar acceso a la app
+            return {
+                token: crearToken(existeUsuario, process.env.SECRETA, '2hr')
+            }
+        },
         crearUsuario: async (parent, { input }, { prisma }) => {
             const existe = await prisma.usuario.findUnique({ where: { correo: input.correo } })
             if (existe) throw new Error("El correo ya está en uso")
@@ -315,12 +378,8 @@ const resolvers = {
                     where: { id_usuario: Number(id) },
                     data: {
                         correo: input.correo,
-                        password: input.password,
                         nombre: input.nombre,
-                        apellidos: input.apellidos,
-                        rol: {
-                            connect: { id_rol: input.id_rol }
-                        }
+                        apellidos: input.apellidos
                     },
                     include: { rol: true }
                 })
@@ -390,47 +449,85 @@ const resolvers = {
             }
         },
         crearColeccion: async (parent, { input }, { prisma }) => {
-            try {
-                const nuevaColeccion = await prisma.coleccion.create({
-                    data: {
-                        estado_lectura: input.estado_lectura,
-                        calificacion_personal: Number(input.calificacion_personal),
-                        fecha_adquisicion: input.fecha_adquisicion,
-                        usuario: {
-                            connect: { id_usuario: input.id_usuario }
-                        },
-                        libro: {
-                            connect: { id_libro: input.id_libro }
+            const {
+                id_usuario,
+                id_libro,
+                id_autor,
+                titulo_libro,
+                isbn_libro,
+                fecha_libro,
+                nombre_autor,
+                nacionalidad_autor,
+                estado_lectura,
+                calificacion_personal,
+                fecha_adquisicion
+            } = input;
+
+            return await prisma.$transaction(async (tx) => {
+                let libroFinalId = id_libro;
+
+                // 1. Si el libro no existe, hay que crearlo
+                if (!libroFinalId) {
+                    let autorFinalId = id_autor;
+
+                    // 2. Si el autor tampoco existe, lo creamos
+                    if (!autorFinalId) {
+                        const nuevoAutor = await tx.autor.create({
+                            data: { nombre: nombre_autor, nacionalidad: nacionalidad_autor }
+                        });
+                        autorFinalId = nuevoAutor.id_autor;
+                    }
+                    let fechaISO = null;
+                    if (input.fecha_libro) {
+                        // Dividimos el string "10/04/2026"
+                        const [dia, mes, anio] = input.fecha_libro.split('/');
+                        // Creamos el objeto Date (Ojo: meses en JS van de 0 a 11)
+                        const dateObj = new Date(anio, mes - 1, dia);
+
+                        // Validamos que sea una fecha válida antes de convertir a ISO
+                        fechaISO = isNaN(dateObj.getTime()) ? new Date() : dateObj;
+                    }
+
+                    // 3. Creamos el libro con el ID del autor (nuevo o existente)
+                    const nuevoLibro = await tx.libro.create({
+                        data: {
+                            titulo: titulo_libro,
+                            isbn: isbn_libro,
+                            id_autor: parseInt(autorFinalId),
+                            fecha_publicacion: fechaISO
                         }
+                    });
+                    libroFinalId = nuevoLibro.id_libro;
+                }
+
+                // 4. Creamos la colección
+                return await tx.coleccion.create({
+                    data: {
+                        estado_lectura,
+                        calificacion_personal: parseInt(calificacion_personal),
+                        fecha_adquisicion: new Date(fecha_adquisicion),
+                        id_usuario: parseInt(id_usuario),
+                        id_libro: parseInt(libroFinalId)
                     },
-                    include: { usuario: true, libro: true }
-                })
-                return nuevaColeccion
-            } catch (error) {
-                console.error("Error en crearLibro: ", error)
-                throw new Error("No se pudo crear la colección. Revisa que el ISBN sea único.");
-            }
+                    include: { libro: true }
+                });
+            });
         },
         actualizarColeccion: async (parent, { id, input }, { prisma }) => {
             try {
-                const actualizarColeccion = await prisma.coleccion.update({
+                return await prisma.coleccion.update({
                     where: { id_coleccion: Number(id) },
                     data: {
                         estado_lectura: input.estado_lectura,
                         calificacion_personal: Number(input.calificacion_personal),
-                        fecha_adquisicion: input.fecha_adquisicion,
-                        usuario: {
-                            connect: { id_usuario: input.id_usuario }
-                        },
-                        libro: {
-                            connect: { id_libro: input.id_libro }
-                        }
+                        fecha_adquisicion: new Date(input.fecha_adquisicion),
+                        usuario: input.id_usuario ? { connect: { id_usuario: input.id_usuario } } : undefined,
+                        libro: input.id_libro ? { connect: { id_libro: input.id_libro } } : undefined,
                     },
-                    include: { usuario: true, libro: true }
-                })
-                return actualizarColeccion
+                    include: { usuario: true, libro: { include: { autor: true } } }
+                });
             } catch (error) {
-                throw new Error("No se puede actualizar la colección: " + error.message)
+                throw new Error("No se puede actualizar la colección: " + error.message);
             }
         },
         eliminarColeccion: async (parent, { id }, { prisma }) => {

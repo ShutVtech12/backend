@@ -1,6 +1,11 @@
 const gql = require('graphql-tag');
 
 const typeDefs = gql`
+
+    type Token {
+        token: String
+    }
+
     type Autor {
         id_autor: ID!
         nombre: String
@@ -50,10 +55,12 @@ const typeDefs = gql`
         obtenerRol(id: ID!): Rol
         obtenerUsuario(id: ID!): Usuario
         obtenerLibro(id: ID!): Libro
+        obtenerLibroPorISBN(isbn: String!): Libro
         obtenerColeccion(id: ID!): Coleccion
 
         obtenerUsuariosPorRol(id: ID!): [Usuario]
         obtenerLibrosPorAutor(id: ID!): [Libro]
+        obtenerAutorPorNombre(nombre: String!): Autor
         obtenerColeccionesPorUsuario(id: ID!): [Coleccion]
         obtenerColeccionesPorLibro(id: ID!): [Coleccion]
     }
@@ -69,17 +76,22 @@ const typeDefs = gql`
 
     input UsuarioInput{
         correo: String!
-        password: String!
+        password: String
         nombre: String!
         apellidos: String!
-        id_rol: Int!
+        id_rol: Int
+    }
+
+    input AutenticarUsuarioInput{
+        correo: String!
+        password: String!
     }
 
     input LibroInput{
         titulo: String!
         isbn: String!
         fecha_publicacion: String!
-        id_autor: Int!
+        id_autor: Int
     }
 
     input ColeccionInput{
@@ -87,7 +99,13 @@ const typeDefs = gql`
         calificacion_personal: Int!
         fecha_adquisicion: String!
         id_usuario: Int!
-        id_libro: Int!
+        id_libro: Int
+        id_autor: Int
+        titulo_libro: String
+        isbn_libro: String
+        fecha_libro: String
+        nombre_autor: String
+        nacionalidad_autor: String
     }
 
     type Mutation{
@@ -105,6 +123,7 @@ const typeDefs = gql`
         crearUsuario(input: UsuarioInput): Usuario
         actualizarUsuario(id: ID!, input: UsuarioInput): Usuario
         eliminarUsuario(id: ID!): String
+        autenticarUsuario(input: AutenticarUsuarioInput): Token
 
         #Libro
         crearLibro(input: LibroInput): Libro
